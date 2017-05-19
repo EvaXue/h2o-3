@@ -871,6 +871,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
               UpdateXeY xeytsk = new UpdateXeY(_parms, ytnew, alpha, overwriteX, colCount, _ncolX, tinfo._cats,
                       model._output._normSub, model._output._normMul, model._output._lossFunc, xwF);
               xeytsk.doAll(fr);
+              yreg = xeytsk._yreg;
             } else {
               // If max_updates is odd, we will terminate after the X update, for wide dataset, it updates Y
               UpdateY ytsk = new UpdateY(_parms, yt, alpha, _ncolA, _ncolX, tinfo._cats,
@@ -881,12 +882,19 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             }
             model._output._updates++;
           }
-
-          // 3) Compute average change in objective function
-          objtsk = new ObjCalc(_parms, ytnew, _ncolA, _ncolX, tinfo._cats, model._output._normSub,
-                  model._output._normMul, model._output._lossFunc, weightId);
-          objtsk.doAll(dinfo._adaptedFrame);
-          double obj_new = objtsk._loss + _parms._gamma_x * xtsk._xreg + _parms._gamma_y * yreg;
+          double obj_new = 0;
+          if (_wideDataset) {
+              objtskw = new ObjCalcW(_parms, ytnew, colCount, _ncolX, tinfo._cats, model._output._normSub,
+                      model._output._normMul, model._output._lossFunc, regX, xwF, _parms._k);
+              objtskw.doAll(fr);
+              obj_new = objtskw._loss + _parms._gamma_x * yextsk._xreg + _parms._gamma_y * yreg;
+          } else {
+            // 3) Compute average change in objective function
+            objtsk = new ObjCalc(_parms, ytnew, _ncolA, _ncolX, tinfo._cats, model._output._normSub,
+                    model._output._normMul, model._output._lossFunc, weightId);
+            objtsk.doAll(dinfo._adaptedFrame);
+            obj_new = objtsk._loss + _parms._gamma_x * xtsk._xreg + _parms._gamma_y * yreg;
+          }
           model._output._avg_change_obj = (model._output._objective - obj_new) / nobs;
           model._output._iterations++;
 
@@ -917,6 +925,10 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           model.update(_job); // Update model in K/V store
         }
 
+        if (_wideDataset) {
+          yinit = new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res; // extract X into archetype
+          model._output._archetypes_raw = new Archetypes(yinit, true, tinfo._catOffsets, numLevels);
+        }
         // 4) Save solution to model output
         // Save X frame for user reference later
         Vec[] xvecs = new Vec[_ncolX];
