@@ -859,7 +859,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
                     model._output._normMul, model._output._lossFunc, regX, xwF, 0)).doAll(fr)._loss;
           } else {
             // find out how much time it takes to update x, for wide dataset, it is updating Y
-            xtsk = new UpdateX(_parms, yt, alpha, overwriteX, _ncolA, _ncolX, tinfo._cats,
+            xtsk = new UpdateX(_parms, yt, alpha, _ncolA, _ncolX, tinfo._cats,
                     model._output._normSub, model._output._normMul, model._output._lossFunc, weightId);
             xtsk.doAll(dinfo._adaptedFrame);
           }
@@ -1456,7 +1456,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     GLRMParameters _parms;
     GlrmLoss[] _lossFunc;
     final double _alpha;      // Step size divided by num cols in A
-    final boolean _update;    // Should we update X from working copy?
     final Archetypes _yt;     // _yt = Y' (transpose of Y)
     final int _ncolA;         // Number of cols in training frame
     final int _ncolX;         // Number of cols in X (k)
@@ -1469,14 +1468,13 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 //    double _loss;    // Loss evaluated on A - XY using new X (and current Y)
     double _xreg;    // Regularization evaluated on new X
 
-    UpdateX(GLRMParameters parms, Archetypes yt, double alpha, boolean update, int ncolA, int ncolX, int ncats,
+    UpdateX(GLRMParameters parms, Archetypes yt, double alpha, int ncolA, int ncolX, int ncats,
             double[] normSub, double[] normMul, GlrmLoss[] lossFunc, int weightId) {
       assert yt != null && yt.rank() == ncolX;
       _parms = parms;
       _yt = yt;
       _lossFunc = lossFunc;
       _alpha = alpha;
-      _update = update;
       _ncolA = ncolA;
       _ncolX = ncolX;
 
@@ -1519,12 +1517,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         // Additional user-specified weight on loss for this row
         double cweight = chkweight.atd(row);
         assert !Double.isNaN(cweight) : "User-specified weight cannot be NaN";
-
-        // Copy old working copy of X to current X if requested
-/*        if (_update) {
-          for (int k = 0; k < _ncolX; k++)
-            chk_xold(cs, k).set(row, chk_xnew(cs, k).atd(row));
-        }*/
 
         // Compute gradient of objective at row
         // Categorical columns
