@@ -868,7 +868,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           // 2) Update Y matrix given fixed X, for wide dataset, update X then.
           if (model._output._updates < _parms._max_updates) {
             if (_wideDataset) {
-              UpdateXeY xeytsk = new UpdateXeY(_parms, ytnew, alpha, overwriteX, colCount, _ncolX, tinfo._cats,
+              UpdateXeY xeytsk = new UpdateXeY(_parms, ytnew, alpha, colCount, _ncolX, tinfo._cats,
                       model._output._normSub, model._output._normMul, model._output._lossFunc, xwF);
               xeytsk.doAll(fr);
               yreg = xeytsk._yreg;
@@ -906,6 +906,21 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             step *= 1.05;
             steps_in_row = Math.max(1, steps_in_row+1);
             overwriteX = true;
+            if (_wideDataset) { // update X matrix right now to avoid potential multi-thread collision.
+              new MRTask() {
+                @Override
+                public void map(Chunk[] chks) {
+                  updateXFrame(chks, 0, _ncolX);
+                }
+              }.doAll(xwF);
+            } else {
+              new MRTask() {
+                @Override
+                public void map(Chunk[] chks) {
+                  updateXFrame(chks, _ncolA, _ncolX);
+                }
+              }.doAll(dinfo._adaptedFrame);
+            }
           } else {    // If objective increased, re-run with smaller step size
             step /= Math.max(1.5, -steps_in_row);
             steps_in_row = Math.min(0, steps_in_row-1);
@@ -925,8 +940,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           model.update(_job); // Update model in K/V store
         }
 
-        if (_wideDataset) {
-          yinit = new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res; // extract X into archetype
+        if (_wideDataset) {   // extract X into archetype
+          yinit = new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res;
           model._output._archetypes_raw = new Archetypes(yinit, true, tinfo._catOffsets, numLevels);
         }
         // 4) Save solution to model output
@@ -991,7 +1006,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           if (_wideDataset) { // for wideDataset, fr does not contain X, xwF does
             fr.remove();
             if (!overwriteX) {
-              if (yt._transposed) {
+              if (yt._transposed) {   // copy YeX into a frame
                 fr = new water.util.ArrayUtils().frame(transpose(yt._archetypes));
               } else {
                 fr = new water.util.ArrayUtils().frame(yt._archetypes);
@@ -1008,6 +1023,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         Scope.untrack(keep);
       }
     }
+
+
 
     private Frame generateFrameOfZeros(int rowCount, int colCount) {
       Vec tempVec = Vec.makeZero(rowCount);
@@ -1421,6 +1438,14 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     }
   }
 
+  public static void updateXFrame(Chunk[] chks, int startncol, int numCols) {
+    int endCol = startncol+numCols;
+    for (int colIndex = startncol; colIndex < endCol; colIndex++) {
+      for (int rowIndex = 0; rowIndex < chks[0]._len; rowIndex++) {
+        xFrameVec(chks, colIndex, 0).set(rowIndex, xFrameVec(chks, colIndex, numCols).atd(rowIndex));
+      }
+    }
+  }
 
   //--------------------------------------------------------------------------------------------------------------------
   // Update X step
@@ -1496,10 +1521,10 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         assert !Double.isNaN(cweight) : "User-specified weight cannot be NaN";
 
         // Copy old working copy of X to current X if requested
-        if (_update) {
+/*        if (_update) {
           for (int k = 0; k < _ncolX; k++)
             chk_xold(cs, k).set(row, chk_xnew(cs, k).atd(row));
-        }
+        }*/
 
         // Compute gradient of objective at row
         // Categorical columns
@@ -1779,14 +1804,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     return yt._transposed?yt._archetypes[j][k]:yt._archetypes[k][j];
   }
 
-  public static void updateXFrame(Chunk[] chks, int ncol, int nrow) {
-    for (int colIndex = 0; colIndex < ncol; colIndex++) {
-      for (int rowIndex = 0; rowIndex < nrow; rowIndex++) {
-        xFrameVec(chks, colIndex, 0).set(rowIndex, xFrameVec(chks, colIndex, ncol).atd(rowIndex));
-      }
-    }
-  }
-
   //--------------------------------------------------------------------------------------------------------------------
   // Update X equivalent to Y step for wide datasets.  Now the X is stored in H2OFrame instead of Y in 2D double array
   //--------------------------------------------------------------------------------------------------------------------
@@ -1795,7 +1812,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     GLRMParameters _parms;
     GlrmLoss[] _lossFunc;
     final double _alpha;      // Step size divided by num cols in A
-    final boolean _update;    // Should we update X from working copy?
     final Archetypes _yt;     // _yt = Y' (transpose of Y)
     final int _ncolA;         // Number of cols in training frame
     final int _ncolX;         // Number of cols in X (k)
@@ -1807,14 +1823,13 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
     // Output
     double _yreg;    // Regularization evaluated on new X
 
-    UpdateXeY(GLRMParameters parms, Archetypes yt, double alpha, boolean update, int ncolA, int ncolX, int ncats,
+    UpdateXeY(GLRMParameters parms, Archetypes yt, double alpha, int ncolA, int ncolX, int ncats,
             double[] normSub, double[] normMul, GlrmLoss[] lossFunc, Frame xVecs) {
       assert yt != null && yt.rank() == ncolX;
       _parms = parms;
       _yt = yt;
       _lossFunc = lossFunc;
       _alpha = alpha;
-      _update = update;
       _ncolA = ncolA;
       _ncolX = ncolX;
       _xVecs = xVecs;
@@ -1844,9 +1859,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       ArrayList<Integer> xChunkIndices = findXChunkIndices(_xVecs, tArowStart, tArowEnd, _yt); // grab x chunk ind
       int numColIndexOffset = _yt._catOffsets[_ncats] - _ncats;   // index into xframe numerical rows
       getXChunk(_xVecs, xChunkIndices.remove(0), xChunks); // get the first xFrame chunk
-      if (_update) {        // Copy old working copy of X to current X if requested
-        updateXFrame(xChunks, _ncolX, xChunks[0]._len);
-      }
 
       int xChunkRowStart = (int) xChunks[0].start();   // first row index of xFrame
       int xChunkSize = (int) xChunks[0]._len;   // number of rows in xFrame
