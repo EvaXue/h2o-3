@@ -855,8 +855,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             model._output._normMul, model._output._lossFunc, xwF);
             double[][] yttmp = yextsk.doAll(fr)._ytnew;
             ytnew = new Archetypes(yttmp, true, tinfo._catOffsets, numLevels, ytnew._weights);
-            yextsk._loss = (new ObjCalcW(_parms, ytnew, colCount, _ncolX, tinfo._cats, model._output._normSub,
-                    model._output._normMul, model._output._lossFunc, regX, xwF, 0)).doAll(fr)._loss;
+/*            yextsk._loss = (new ObjCalcW(_parms, ytnew, colCount, _ncolX, tinfo._cats, model._output._normSub,
+                    model._output._normMul, model._output._lossFunc, regX, xwF, 0)).doAll(fr)._loss;*/
           } else {
             // find out how much time it takes to update x, for wide dataset, it is updating Y
             xtsk = new UpdateX(_parms, yt, alpha, _ncolA, _ncolX, tinfo._cats,
@@ -1581,49 +1581,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         _xreg += _parms._regularization_x.regularize(xnew);
         for (int k = 0; k < _ncolX; k++)
           chk_xnew(cs, k).set(row,xnew[k]);
-
-
-        // loss function is never used...
-/*        // Compute loss function using new x_i
-        // Categorical columns
-        for (int j = 0; j < _ncats; j++) {
-          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
-          multVecArrFast(xnew, prod, _yt, j);
-          _loss +=  _lossFunc[j].mloss(prod, (int) a[j], _yt._numLevels[j]);
-        }
-
-        // Numeric columns
-        for (int j = _ncats; j < _ncolA; j++) {
-          if (Double.isNaN(a[j])) continue;   // Skip missing observations in row
-          int js = j - _ncats;
-          double txy = _yt.lmulNumCol(xnew, js);
-          _loss += _lossFunc[j].loss(txy, (a[j] - _normSub[js]) * _normMul[js]);
-        }
-        _loss *= cweight;*/
       }
     }
-
-
-    /* same as ArrayUtils.multVecArr() but faster I hope. */
-/*    private void multVecArrFast(double[] xnew, double[] xy, Archetypes yt, int j) {
-      int catColJLevel = yt._numLevels[j];
-      if (yt._transposed) {
-        for (int level = 0; level < catColJLevel; level++) {
-          int cidx = yt.getCatCidx(j, level);
-          double[] yArchetypes = yt._archetypes[cidx];
-          xy[level] = 0.0;
-          for (int k = 0; k < _ncolX; k++)
-            xy[level] += xnew[k] * yArchetypes[k];
-        }
-      } else {
-        for (int level = 0; level < catColJLevel; level++) {
-          int cidx = yt.getCatCidx(j, level);
-          xy[level] = 0.0;
-          for (int k = 0; k < _ncolX; k++)
-            xy[level] += xnew[k] * yt._archetypes[k][cidx];
-        }
-      }
-    }*/
 
     @Override public void reduce(UpdateX other) {
    //   _loss += other._loss;
@@ -1841,11 +1800,11 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       int tArowEnd = numTArow + numTArow - 1;   // last row index of chunk T(A)
       Chunk[] xChunks = new Chunk[_parms._k*2]; // to store chunk of X
 
-      double[] xy = null;
-      double[] prod = null;
+      double[][] xy = null;   // here should be a matrix
+      double[][] prod = null; // here should be a matrix
       if (_yt._numLevels[tArowStart] > 0) {
-        xy = new double[_yt._numLevels[tArowStart]]; // maximum categorical level column is always the first one
-        prod = new double[_yt._numLevels[tArowStart]];
+        xy = new double[_yt._numLevels[tArowStart]][_parms._k]; // maximum categorical level column is always the first one
+        prod = new double[_yt._numLevels[tArowStart]][_parms._k];
       }
       // grab the corresponding X chunks
       ArrayList<Integer> xChunkIndices = findXChunkIndices(_xVecs, tArowStart, tArowEnd, _yt); // grab x chunk ind
@@ -1902,6 +1861,8 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             }
 
             double[] weight = _lossFunc[tARow].mlgrad(xy, (int) a, prod, catColJLevel);
+        //    for (int c=)
+
             if (_yt._transposed) {
               for (int c = 0; c < catColJLevel ; c++) { // go through each enum level
                 int cidx = _yt.getCatCidx(j, c);
@@ -1923,7 +1884,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
           }
         } else {  // dealing with numerical columns
-          xRow = tARow - xChunkRowStart + numColIndexOffset; //index into x frame which expanded categoricals
+          xRow = tARow - xChunkRowStart + numColIndexOffset; //index into x frame with expanded categoricals
 
           if (xRow >= xChunkSize) {  // load in new chunk of xFrame
             if (xChunkIndices.size() < 1) {
@@ -1953,21 +1914,21 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             for (int k=0; k<_ncolX; k++) {
               tgrad[k] += weight * yArcheTypeVal(_yt, j, k);
             }
-
-            //update row x
-            for (int k=0; k<_ncolX; k++) {
-              double xold = xFrameVec(xChunks, k, 0).atd(xRow);
-              u[k] = xold-_alpha*tgrad[k];
-            }
-
-            // calculate how much update is due to regularization term
-            double[] xnew = _parms._regularization_y.rproxgrad(u, _alpha*_parms._gamma_y, rand);
-            _yreg += _parms._regularization_y.regularize(xnew);
-
-            for (int k=0; k<_ncolX; k++)  {
-              xFrameVec(xChunks, k, _parms._k).set(xRow, xnew[k]);
-            }
           }
+        }
+
+        //update row x
+        for (int k=0; k<_ncolX; k++) {
+          double xold = xFrameVec(xChunks, k, 0).atd(xRow);
+          u[k] = xold-_alpha*tgrad[k];
+        }
+
+        // calculate how much update is due to regularization term
+        double[] xnew = _parms._regularization_y.rproxgrad(u, _alpha*_parms._gamma_y, rand);
+        _yreg += _parms._regularization_y.regularize(xnew);
+
+        for (int k=0; k<_ncolX; k++)  {
+          xFrameVec(xChunks, k, _parms._k).set(xRow, xnew[k]);
         }
       }
     }
