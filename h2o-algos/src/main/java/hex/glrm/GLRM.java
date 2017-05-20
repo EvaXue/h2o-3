@@ -1800,21 +1800,30 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
       int tArowEnd = numTArow + numTArow - 1;   // last row index of chunk T(A)
       Chunk[] xChunks = new Chunk[_parms._k*2]; // to store chunk of X
 
-      double[][] xy = null;   // here should be a matrix
-      double[][] prod = null; // here should be a matrix
-      if (_yt._numLevels[tArowStart] > 0) {
-        xy = new double[_yt._numLevels[tArowStart]][_parms._k]; // maximum categorical level column is always the first one
-        prod = new double[_yt._numLevels[tArowStart]][_parms._k];
-      }
+      double[][] xMat = null; // store a chunk of x
+      double[] xy = null;
+      double[] prod = null;
+      double[][] tgradEnum = null;
+      double[][] uEnum = null;
+      ArrayList<Integer> tempXChunk = null;   // store xChunk cidx for updating X enum rows
+
       // grab the corresponding X chunks
       ArrayList<Integer> xChunkIndices = findXChunkIndices(_xVecs, tArowStart, tArowEnd, _yt); // grab x chunk ind
       int numColIndexOffset = _yt._catOffsets[_ncats] - _ncats;   // index into xframe numerical rows
+      if (_yt._numLevels[tArowStart] > 0) {
+        tgradEnum = new double[_yt._numLevels[tArowStart]][_ncolX];
+        uEnum = new double[_yt._numLevels[tArowStart]][_ncolX];
+        xMat = new double[_yt._numLevels[tArowStart]][_ncolX];
+        xy = new double[_yt._numLevels[tArowStart]]; // maximum categorical level column is always the first one
+        prod = new double[_yt._numLevels[tArowStart]];
+      }
       getXChunk(_xVecs, xChunkIndices.remove(0), xChunks); // get the first xFrame chunk
 
       int xChunkRowStart = (int) xChunks[0].start();   // first row index of xFrame
       int xChunkSize = (int) xChunks[0]._len;   // number of rows in xFrame
-      int xRow = 0;   // store true index of X chunk
-      int tARow = 0;  // store true index of T(A) chunk
+      int xChunkRowBound = xChunkRowStart+xChunkSize;
+      int xRow = 0;   // store row index of X chunk
+      int tARow = 0;  // store true index of T(A)
 
       double a = 0;  // store an element of T(A)
       double[] tgrad = new double[_ncolX];  // store a row of tgrad
@@ -1841,49 +1850,72 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
             Arrays.fill(xy, 0, catColJLevel, 0);  // reset xy before accumulate sum
 
             // compute gradient of objective for enum columns
-            for (int level=0; level < catColJLevel; level++) {
-              xRow = level+_yt._catOffsets[tARow]-xChunkRowStart;   // row index for x chunk
-              if (xRow >= xChunkSize) {   // repeated code here.  Make sure we have the right X chunk
-                if (xChunkIndices.size() < 1) {
-                  Log.err("GLRM train", "Chunks mismatch between A transpose and X frame.");
-                } else {
-                  getXChunk(_xVecs, xChunkIndices.remove(0), xChunks); // get a xVec chunk
+            if (j == 0) { // grab a chunk of X, only need to do it once per row
+              for (int level = 0; level < catColJLevel; level++) {   // one row of enum expands to catColJLevels rows here
+                xRow = level + _yt._catOffsets[tARow] - xChunkRowStart;   // relative row index for x chunk
+                if (xRow >= xChunkSize) {   // repeated code here.  Make sure we have the right X chunk
+                  if (xChunkIndices.size() < 1) {
+                    Log.err("GLRM train", "Chunks mismatch between A transpose and X frame.");
+                  } else {
+                    getXChunk(_xVecs, xChunkIndices.remove(0), xChunks); // get a xVec chunk
+                    xChunkRowStart = (int) xChunks[0].start();    // true first row index of xFrame
+                    xChunkSize = (int) xChunks[0]._len;           // number of rows in xFrame
+                    xChunkRowBound = xChunkRowStart+xChunkSize;
+                    xRow = level + _yt._catOffsets[tARow] - xChunkRowStart; // relative row index of xFrame
+                  }
+                }
 
-                  xChunkRowStart = (int) xChunks[0].start();   // first row index of xFrame
-                  xChunkSize = (int) xChunks[0]._len;   // number of rows in xFrame
-                  xRow = level + _yt._catOffsets[tARow] - xChunkRowStart;
+                for (int k = 0; k < _ncolX; k++) { // store a matrix of catColJLevel by _ncolX elements to form one T(A)
+                  xMat[level][k] = xFrameVec(xChunks, k, 0).atd(xRow);
                 }
               }
-              for (int k=0; k<_ncolX; k++) {
-                xy[level] += xFrameVec(xChunks, k, 0).atd(xRow) * yArcheTypeVal(_yt, j, k);
+            }
 
+            // obtained the matrix of X to form XY for one element of T(A)
+            for (int level=0; level < catColJLevel; level++) {
+              for (int k = 0; k < _ncolX; k++) {
+                xy[level] += xMat[level][k] * yArcheTypeVal(_yt, j, k);
               }
             }
 
-            double[] weight = _lossFunc[tARow].mlgrad(xy, (int) a, prod, catColJLevel);
-        //    for (int c=)
-
-            if (_yt._transposed) {
-              for (int c = 0; c < catColJLevel ; c++) { // go through each enum level
-                int cidx = _yt.getCatCidx(j, c);
-                double weights = cweight * weight[c];
-                double[] yArchetypes = _yt._archetypes[cidx];
-                for (int k = 0; k < _ncolX; k++)
-                  tgrad[k] += weights * yArchetypes[k];
-
-              }
-            } else {
-              for (int c = 0; c < catColJLevel; c++) {
-                int cidx = _yt.getCatCidx(j, c);
-                double weights = cweight * weight[c];
-
-                for (int k = 0; k < _ncolX; k++)
-                  tgrad[k] += weights * yArcheTypeVal(_yt, k, cidx);
+            double[] weight = _lossFunc[tARow].mlgrad(xy, (int) a, prod, catColJLevel); // catColJLevel by 1
+            // form tgradEnum which is catColJLevel by _ncolX
+            for (int c = 0; c < catColJLevel; c++) {
+              for (int k = 0; k < _ncolX; k++) {
+                tgradEnum[c][k]+=weight[c]*cweight*yArcheTypeVal(_yt, j, k); // need to accumulate this over all columns
               }
             }
-
           }
-        } else {  // dealing with numerical columns
+
+          //update X which is catColJLevel by k by uEnum per one row of T(A)
+          for (int level=0; level<catColJLevel; level++) {
+            xRow = level + _yt._catOffsets[tARow] - xChunkRowStart; // relative row index into x chunk
+            for (int k = 0; k < _ncolX; k++) {
+              uEnum[level][k] = xMat[level][k] - _alpha * tgradEnum[level][k];
+            }
+            // calculate how much update is due to regularization term
+            double[] xnew = _parms._regularization_y.rproxgrad(uEnum[level], _alpha*_parms._gamma_y, rand);
+            _yreg += _parms._regularization_y.regularize(xnew);
+            // need to update X chunks with new X values, it is of size catColJLevel by k
+            // checking which x chunks contains the x elements that needed to be updated.
+            int trueXRow = level+_yt._catOffsets[tARow];
+
+            if ((trueXRow < xChunkRowStart) || (trueXRow >= xChunkRowBound)) {   // repeated code here.  Make sure we have the right X chunk
+              if (xChunkIndices.size() < 1) {
+                Log.err("GLRM train", "Chunks mismatch between A transpose and X frame.");
+              } else {
+                tempXChunk = findXChunkIndices(_xVecs, tARow, tARow, _yt); // grab x chunk ind
+                getXChunk(_xVecs, tempXChunk.remove(0), xChunks); // get a xVec chunk
+                xChunkRowStart = (int) xChunks[0].start();    // true first row index of xFrame
+                xChunkSize = (int) xChunks[0]._len;           // number of rows in xFrame
+              }
+            }
+            xRow = trueXRow-xChunkRowStart;
+            for (int k=0; k<_ncolX; k++)  {
+              xFrameVec(xChunks, k, _parms._k).set(xRow, xnew[k]);
+            }
+          }
+        } else {  // dealing with numerical columns, separate from categoricals
           xRow = tARow - xChunkRowStart + numColIndexOffset; //index into x frame with expanded categoricals
 
           if (xRow >= xChunkSize) {  // load in new chunk of xFrame
@@ -1915,30 +1947,27 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
               tgrad[k] += weight * yArcheTypeVal(_yt, j, k);
             }
           }
-        }
+          //update row x
+          for (int k=0; k<_ncolX; k++) {
+            double xold = xFrameVec(xChunks, k, 0).atd(xRow);
+            u[k] = xold-_alpha*tgrad[k];
+          }
 
-        //update row x
-        for (int k=0; k<_ncolX; k++) {
-          double xold = xFrameVec(xChunks, k, 0).atd(xRow);
-          u[k] = xold-_alpha*tgrad[k];
-        }
+          // calculate how much update is due to regularization term
+          double[] xnew = _parms._regularization_y.rproxgrad(u, _alpha*_parms._gamma_y, rand);
+          _yreg += _parms._regularization_y.regularize(xnew);
 
-        // calculate how much update is due to regularization term
-        double[] xnew = _parms._regularization_y.rproxgrad(u, _alpha*_parms._gamma_y, rand);
-        _yreg += _parms._regularization_y.regularize(xnew);
-
-        for (int k=0; k<_ncolX; k++)  {
-          xFrameVec(xChunks, k, _parms._k).set(xRow, xnew[k]);
+          for (int k=0; k<_ncolX; k++)  {
+            xFrameVec(xChunks, k, _parms._k).set(xRow, xnew[k]);
+          }
         }
       }
     }
-
 
     @Override public void reduce(UpdateXeY other) {
       _yreg += other._yreg;
     }
   }
-
 
   private static class UpdateY extends MRTask<UpdateY> {
     // Input
