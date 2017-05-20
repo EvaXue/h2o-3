@@ -1864,7 +1864,7 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
                     xRow = level + _yt._catOffsets[tARow] - xChunkRowStart; // relative row index of xFrame
                   }
                 }
-
+                Arrays.fill(tgradEnum[level], 0, _ncolX, 0);
                 for (int k = 0; k < _ncolX; k++) { // store a matrix of catColJLevel by _ncolX elements to form one T(A)
                   xMat[level][k] = xFrameVec(xChunks, k, 0).atd(xRow);
                 }
@@ -1889,7 +1889,6 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
 
           //update X which is catColJLevel by k by uEnum per one row of T(A)
           for (int level=0; level<catColJLevel; level++) {
-            xRow = level + _yt._catOffsets[tARow] - xChunkRowStart; // relative row index into x chunk
             for (int k = 0; k < _ncolX; k++) {
               uEnum[level][k] = xMat[level][k] - _alpha * tgradEnum[level][k];
             }
