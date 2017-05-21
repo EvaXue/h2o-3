@@ -940,29 +940,36 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
           model.update(_job); // Update model in K/V store
         }
 
-        if (_wideDataset) {   // extract X into archetype
-          yinit = new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res;
-          model._output._archetypes_raw = new Archetypes(yinit, true, tinfo._catOffsets, numLevels);
-        }
-        // 4) Save solution to model output
-        // Save X frame for user reference later
-        Vec[] xvecs = new Vec[_ncolX];
-        String[] xnames = new String[_ncolX];
-        if (overwriteX) {
-          for (int i = 0; i < _ncolX; i++) {
-            xvecs[i] = fr.vec(idx_xnew(i, _ncolA, _ncolX));
-            xnames[i] = "Arch" + String.valueOf(i + 1);
-          }
-        } else {
-          for (int i = 0; i < _ncolX; i++) {
-            xvecs[i] = fr.vec(idx_xold(i, _ncolA));
-            xnames[i] = "Arch" + String.valueOf(i + 1);
-          }
-        }
         model._output._representation_name = StringUtils.isNullOrEmpty(_parms._representation_name) ?
                 "GLRMLoading_" + Key.rand() : _parms._representation_name;
         model._output._representation_key = Key.make(model._output._representation_name);
+
+        String[] xnames = new String[_ncolX];
+        for (int i=0; i<_ncolX; i++) {
+          xnames[i] = "Arch"+String.valueOf(i+1);
+        }
+        Vec[] xvecs = new Vec[_ncolX];
+        if (_wideDataset) {   // extract X into archetype
+          // extract Y from array into a frame
+          fr = new water.util.ArrayUtils().frame(yt._transposed?yt._archetypes:transpose(yt._archetypes));
+          for (int i=0; i<_ncolX; i++) {
+            xvecs[i] = fr.vec(i);
+          }
+        //  fr = new Frame(new water.util.ArrayUtils().frame(transpose(yt._archetypes)), ;  // YeX stored as frame, duplicated
+          yt._archetypes = new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res;
+          model._output._archetypes_raw = new Archetypes(yt._archetypes, yt._transposed, tinfo._catOffsets,
+                  numLevels);
+
+
+        } else {
+          // 4) Save solution to model output
+          // Save X frame for user reference later
+          for (int i = 0; i < _ncolX; i++) {
+            xvecs[i] = fr.vec(idx_xnew(i, _ncolA, _ncolX));
+          }
+        }
         Frame x = new Frame(model._output._representation_key, xnames, xvecs);
+
         xinfo = new DataInfo(x, null, 0, true, DataInfo.TransformType.NONE,
                 DataInfo.TransformType.NONE, false, false, false,
                 /* weights */ false, /* offset */ false, /* fold */ false);
@@ -997,28 +1004,12 @@ public class GLRM extends ModelBuilder<GLRMModel, GLRMModel.GLRMParameters, GLRM
         if (tempinfo != null) tempinfo.remove();
         // copy what is in  XeY into archetypes
         if (xwF != null) {
-          yt._archetypes = transpose(new FrameUtils.Vecs2ArryTsk(_ncolY, _parms._k).doAll(xwF).res);
           xwF.remove();
         }
         // if (x != null && !_parms._keep_loading) x.delete();
         // Clean up unused copy of X matrix
-        if (fr != null) {
-          if (_wideDataset) { // for wideDataset, fr does not contain X, xwF does
-            fr.remove();
-            if (!overwriteX) {
-              if (yt._transposed) {   // copy YeX into a frame
-                fr = new water.util.ArrayUtils().frame(transpose(yt._archetypes));
-              } else {
-                fr = new water.util.ArrayUtils().frame(yt._archetypes);
-              }
-            }
-          } else {
-            if (overwriteX) {
-              for (int i = 0; i < _ncolX; i++) fr.vec(idx_xold(i, _ncolA)).remove();
-            } else {
-              for (int i = 0; i < _ncolX; i++) fr.vec(idx_xnew(i, _ncolA, _ncolX)).remove();
-            }
-          }
+        if ((fr != null) && !_wideDataset) {
+            for (int i = 0; i < _ncolX; i++) fr.vec(idx_xold(i, _ncolA)).remove();
         }
         Scope.untrack(keep);
       }
